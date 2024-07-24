@@ -1,0 +1,13 @@
+notebook
+input_tmp
+output_tmp
+data
+Báo cáo mẫu
+image
+dump.ipynb
+output.pdf
+craft_pytorch/result/*
+craft_pytorch/craft_mlt_25k.pth
+craft_pytorch/craft_refiner_CTW1500.pth
+model
+src/crawl/weights
