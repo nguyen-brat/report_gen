@@ -11,3 +11,5 @@ craft_pytorch/craft_mlt_25k.pth
 craft_pytorch/craft_refiner_CTW1500.pth
 model
 src/crawl/weights
+**/__pycache__/
+*.pyc

@@ -5,6 +5,7 @@ import subprocess
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 import os
+import sys
 from glob import glob
 import shutil
 import numpy as np
@@ -12,6 +13,24 @@ import cv2
 from tqdm import tqdm
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import DBSCAN
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+sys.path.append(project_root)
+
+class OCREngine:
+    def __init__(
+        self, model_path = 'src/crawl/weights/transformerocr.pth',
+        model_type = 'vgg_transformer',
+        device = 'cuda:0'
+    ):
+        config = Cfg.load_config_from_name(model_type)
+        config['weights'] = model_path
+        config['cnn']['pretrained'] = False
+        config['device'] = device
+        self.detector = Predictor(config)
+
+    def predict(self, img):
+        return self.detector.predict(img)
 
 class OCRHandler:
     ##################################################
@@ -169,13 +188,13 @@ class PdfOCR(OCRHandler):
             self,
             model_path = 'src/crawl/weights/transformerocr.pth',
             model_type = 'vgg_transformer',
-            deivce = 'cuda:0',
+            device = 'cuda:0',
             script_path='script/script.sh',
     ):
         self.model_path = model_path
-        self.device = deivce
+        self.device = device
         self.script_path = script_path
-        self.ocr_engine_loading(model_path=model_path, device=deivce, model_type=model_type)
+        self.ocr_engine_loading(model_path=model_path, device=device, model_type=model_type)
 
 
     def __call__(
@@ -251,9 +270,14 @@ class PdfOCR(OCRHandler):
         config['weights'] = model_path
         config['cnn']['pretrained'] = False
         config['device'] = device
-        self.detector = Predictor(config)
+        self.detector = OCREngine(model_path=model_path, model_type=model_type, device=device)
 
 if __name__ == "__main__":
-    reader = PdfOCR()
-    output = reader('37302-1.png')
+    reader = PdfOCR(
+        model_path = 'src/crawl/weights/transformerocr.pth',
+        model_type = 'vgg_transformer',
+        device = 'cuda:0',
+        script_path='script/script.sh',
+    )
+    output = reader('image/37302-1.png')
     print(output)
