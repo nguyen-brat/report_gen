@@ -197,7 +197,7 @@ class PdfOCR(OCRHandler):
         self.ocr_engine_loading(model_path=model_path, device=device, model_type=model_type)
 
 
-    def __call__(
+    def predict(
             self,
             image_path,
             n_neighbors=1, # n-neighbor for outlier classify using k-nearest neighbor
@@ -214,9 +214,7 @@ class PdfOCR(OCRHandler):
         return final_output
     
 
-    def extract_text(self, image_path):
-
-        img_path = image_path
+    def extract_text(self, img_path):
         pil_img = Image.open(img_path)
         img = np.array(pil_img)
         if len(img.shape) == 2:
@@ -231,7 +229,7 @@ class PdfOCR(OCRHandler):
         texts = []
         
         for bbox in tqdm(bboxs):
-            roi = self.extract_text_from_bboxes(image_path, bbox)
+            roi = self.extract_text_from_bboxes(img_path, bbox)
             # Convert the ROI back to PIL Image for the detector
             roi_pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
             texts.append(self.detector.predict(roi_pil))
@@ -279,5 +277,5 @@ if __name__ == "__main__":
         device = 'cuda:0',
         script_path='script/script.sh',
     )
-    output = reader('image/37302-1.png')
+    output = reader.predict('image/37302-1.png')
     print(output)
