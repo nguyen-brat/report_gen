@@ -5,6 +5,7 @@ import subprocess
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 import os
+from os.path import join as osp
 import sys
 from glob import glob
 import shutil
@@ -14,7 +15,7 @@ from tqdm import tqdm
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import DBSCAN
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(project_root)
 
 class OCREngine:
@@ -39,8 +40,10 @@ class OCRHandler:
             ocr_results,
             n_neighbors=1,
             eps=2.8,
-            min_samples=2
-    ):
+            eps2=0.035,
+            min_samples=2,
+            image_path=None,
+    )->str:
         '''
         Cluster ocr result into group of text. Include 2 stage:
         stage 1: divide the ocr result into paragraph by using dbscan for unsupervise group and
@@ -49,12 +52,16 @@ class OCRHandler:
         the x and y coordinate then mesure if there any different in the present and privous height
         of text bounding box to devide the new line.
         '''
+        if isinstance(image_path, str):
+            image_height = max(Image.open(image_path).size)
+        else:
+            image_height = max(image_path.size)
         y_length = []
         for output in ocr_results:
             process_data = self.get_center_coordinate(output)
             y_length.append(process_data[1])
         mean_length = np.array(y_length).mean()
-        _, labels = self.cluster(ocr_results, n_neighbors=n_neighbors, eps=eps*mean_length, min_samples=min_samples)
+        _, labels = self.cluster(ocr_results, n_neighbors=n_neighbors, eps=mean_length*eps, min_samples=min_samples)
         num_labels_ = int(max(labels)) + 1
 
         results = ''
@@ -65,7 +72,7 @@ class OCRHandler:
         return results
 
 
-    def _process_ocr_results(self, ocr_results):
+    def _process_ocr_results(self, ocr_results)->str:
         '''
         Logic to sort text in the same line in the same order is to sort every value by y first
         Logic to choose the text on the same line is if next ocr result has diff height  exceed last height/2
@@ -205,31 +212,37 @@ class PdfOCR(OCRHandler):
             min_samples=2 # min sample parameter used in dbscan
     ):
         outputs = self.extract_text(image_path)
-        final_output = self.process_ocr_results(outputs, n_neighbors=n_neighbors, eps=eps, min_samples=min_samples)
+        final_output = self.process_ocr_results(outputs, n_neighbors=n_neighbors, eps=eps, min_samples=min_samples, image_path=image_path)
 
         #clean temp file
-        shutil.rmtree("output_tmp")
-        shutil.rmtree("input_tmp")
+        shutil.rmtree(osp(project_root, "output_tmp"))
+        shutil.rmtree(osp(project_root, "input_tmp"))
 
         return final_output
     
 
-    def extract_text(self, img_path):
-        pil_img = Image.open(img_path)
+    def extract_text(self, image_path):
+        '''
+        Return a list of word and it coordinate
+        '''
+        if isinstance(image_path, str):
+            pil_img = Image.open(image_path).convert('RGB')
+        else:
+            pil_img = image_path
         img = np.array(pil_img)
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif len(img.shape) == 3 and img.shape[2] == 3:
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        
-        os.makedirs("input_tmp", exist_ok=True)
-        pil_img.save("input_tmp/image.png")
+
+        os.makedirs(osp(project_root, "input_tmp"), exist_ok=True)
+        pil_img.save(osp(project_root, "input_tmp/image.png"))
         
         bboxs = self.extract_text_bounding_box()
         texts = []
         
         for bbox in tqdm(bboxs):
-            roi = self.extract_text_from_bboxes(img_path, bbox)
+            roi = self.extract_text_from_bboxes(image_path, bbox)
             # Convert the ROI back to PIL Image for the detector
             roi_pil = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
             texts.append(self.detector.predict(roi_pil))
@@ -238,11 +251,11 @@ class PdfOCR(OCRHandler):
     
 
     def extract_text_bounding_box(self):
-        os.makedirs("output_tmp", exist_ok=True)
+        os.makedirs(osp(project_root,"output_tmp"), exist_ok=True)
         bash_command = f'bash {self.script_path}'
                                                                 
         _ = subprocess.run(bash_command, shell=True, check=True)
-        folder_path = glob("output_tmp/*.txt")[0]
+        folder_path = glob(osp(project_root, "output_tmp/*.txt"))[0]
         with open(folder_path, "r") as f:
             bboxs = f.read().strip().split()
         bboxs = [self.to_float(bbox) for bbox in bboxs]
@@ -251,8 +264,19 @@ class PdfOCR(OCRHandler):
     
 
     def extract_text_from_bboxes(self, image_path, bbox):
-        # Load the image
-        image = cv2.imread(image_path)
+        if isinstance(image_path, str):
+            image = cv2.imread(image_path)
+        else:
+            img = np.array(image_path.convert('RGB'))
+            if len(img.shape) == 2:
+                image = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            elif len(img.shape) == 3 and img.shape[2] == 3:
+                image = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+        # cv2.imshow("image", image)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows() 
+
         pts = [(bbox[0], bbox[1]), (bbox[2], bbox[3]), (bbox[4], bbox[5]), (bbox[6], bbox[7])]
         mask = np.zeros_like(image)
         cv2.fillPoly(mask, [np.array(pts)], (255, 255, 255))
@@ -272,10 +296,11 @@ class PdfOCR(OCRHandler):
 
 if __name__ == "__main__":
     reader = PdfOCR(
-        model_path = 'src/crawl/weights/transformerocr.pth',
+        model_path = 'model/ocr/transformerocr.pth',
         model_type = 'vgg_transformer',
         device = 'cuda:0',
         script_path='script/script.sh',
     )
-    output = reader.predict('image/37302-1.png')
+    image = Image.open('image/37302-1.png')
+    output = reader.predict(image)
     print(output)
