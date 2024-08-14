@@ -16,5 +16,6 @@ mkdir model/ocr
 cd model/ocr
 wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=12rZ6Y0k_plUXjfzi_FUYoudFMlVzTtXh' -O transformerocr.pth
 ```
+Note: if can't download the ocr model download this gg drive link https://drive.google.com/file/d/12rZ6Y0k_plUXjfzi_FUYoudFMlVzTtXh/view?usp=drive_link
 
 # Run sample

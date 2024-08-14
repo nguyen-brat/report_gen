@@ -1,177 +1,159 @@
 from glob import glob
 import os
+from os.path import join as osp
 import sys
-import tqdm
+from tqdm import tqdm
 import re
-from dataclasses import dataclass
+import json
+from typing import List, Dict
 
-from .extract_text import PdfOCR
-from pdf2image import convert_from_path
-import pdfplumber
-import docx
-import cv2
-from PIL import Image
-import numpy as np
-import pandas as pd
+from .extract_text import DocumentReader
+from ..crawl.general_crawl import CrawlOnlineTool
 
-@dataclass
-class DocumentReaderConfig:
-    model_path: str = 'model/ocr/transformerocr.pth'
-    model_type: str = 'vgg_transformer'
-    device: str = 'cuda:0'
-    script_path: str = 'script/script.sh'
-    n_neighbors: int =1 # n-neighbor for outlier classify using k-nearest neighbor
-    eps: int =2.8 # eps in dbscan (eps = mean_bbox_text_length * eps)
-    min_samples: int =2 # min sample parameter used in dbscan
+from transformers import PreTrainedTokenizerBase
 
-class PdfParser:
-    def predict(self, pdf_path):
-        result = ""
-        pdf = self.pdf_parsing(pdf_path)
-        for page in pdf.pages:
-            result += page.extract_text()
-        return result
-
-    def pdf_parsing(self, pdf_path):
-        return pdfplumber.open(pdf_path)
-
-class DocumentReader:
+def extract_text(
+        unzip_data_path:str,
+        text_datapath:str,
+        read_engine:DocumentReader,
+):
     '''
-    Parser all document include scan pdf, pdf, docx to text
+    convert raw unzip data into text file. The unzip data could have alot of extention include:
+        - scan/non-scan pdf
+        - image (jpeg, png,...)
+        - xls
+        - doc
+        - docx
+
+    Args:
+        unzip_data_path: the unzip extracted data path
+        text_datapath: the output text data path extracted from unzip file
+        read_engine: reader engine
     '''
-    def __init__(
-            self,
-            config:DocumentReaderConfig=DocumentReaderConfig()
-    ):
-        self.config = config
-        self.char_space = "aáàảãạăắằẳẵặâấầẩẫậbcdđeéèẻẽẹêếềểễệfghiíìỉĩịjklmnoóòỏõọôốồổỗộơớờởỡợpqrstuúùủũụưứừửữựvwxyýỳỷỹỵAÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬBCDĐEÉÈẺẼẸÊẾỀỂỄỆFGHIÍÌỈĨỊJKLMNOÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢPQRSTUÚÙỦŨỤƯỨỪỬỮỰVWXYÝỲỶỸỴ0123456789.,!?()[]{}:;-_+=<>/@#$%^&*\n\t\r\f\v "
-        self.ocr_engine = PdfOCR(config.model_path, config.model_type, config.device, config.script_path)
-        self.pdf_parser_enginer = PdfParser()
-
-    def predict(self, document_path):
-        file_extention = document_path.split('.')[-1]
-        if file_extention == 'pdf':
-            result = self.transform_pdf(document_path)
-            if self.isScan_pdf(result):
-                result = self.transform_ocr(document_path)
-        elif file_extention == 'docx' or file_extention == 'doc':
-            result = self.transform_docx(document_path)
-        elif file_extention in ['jpeg', 'png', 'jpg']:
-            result = self.transform_image(document_path)
-        else:
-            raise TypeError(f"Not support the {file_extention} extention document")
-
-        return result
-    
-    def transform_image(self, image_path, enable_straingt_transform=False):
-        if enable_straingt_transform:
-            image = self.rotate_image(image_path)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(image)
-        else:
-            image = Image.open(image_path)
-        result = self.ocr_engine.predict(
-            image,
-            self.config.n_neighbors,
-            self.config.eps,
-            self.config.min_samples
-        )
-        return result
-
-    def transform_ocr(self, pdf_path):
-        results = ''
-        images = convert_from_path(pdf_path)
-        for image in images:
-            results += self.ocr_engine.predict(
-                image,
-                self.config.n_neighbors,
-                self.config.eps,
-                self.config.min_samples
-            ) + '\n'
-            print(results)
-            print("----------------------------")
-        return results.strip()
-
-    def transform_pdf(self, pdf_path):
-        return self.pdf_parser_enginer.predict(pdf_path)
-
-    def transform_docx(self, docx_path):
-        doc = docx.Document(docx_path)
-        fullText = []
-        for para in doc.paragraphs:
-            fullText.append(para.text)
-        return '\n'.join(fullText)
-    
-    def transform_xls(self, docx_path):
-        # Read the XLS file
-        df = pd.read_excel(docx_path)
-        return df.to_string(index=False)
-
-    def isScan_pdf(self, doc:str):
-        '''
-        The scan pdf will give error font parse or empty string
-        '''
-        if doc == '':
-            return True
-        for charac in doc:
-            if charac in self.char_space:
-                continue
-            else:
-                return True
-        return False
-    
-    def rotate_image(self, image_path):
-        img = cv2.imread(image_path)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # Apply edge detection
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-        # Use Hough Line Transform to detect lines
-        lines = cv2.HoughLines(edges, 1, np.pi/180, 200)
-        if lines is not None:
-            # Find the dominant line angle
-            angles = [line[0][1] for line in lines]
-            dominant_angle = np.median(angles)
-            # Convert angle to degrees
-            angle_degrees = np.degrees(dominant_angle)
-            # Adjust angle to straighten the image
-            if angle_degrees < 45:
-                rotation_angle = angle_degrees
-            elif angle_degrees < 135:
-                rotation_angle = angle_degrees - 90
-            else:
-                rotation_angle = angle_degrees - 180
-            # Rotate the image
-            (h, w) = img.shape[:2]
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
-            rotated = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-            return rotated
-        else:
-            return img
-
+    extention = ['pdf', 'doc', 'docx', 'jpeg', 'png', 'jpg', 'xls']
+    os.makedirs(text_datapath, exist_ok=True)
+    paths = glob.glob(unzip_data_path + "/*/*")
+    for path in tqdm(paths):
+        text_result = read_engine(path)
+        file_name = ''
+        if extention in path:
+            file_name = path.split('/')[-1].split(extention)[0]
+        if file_name == '':
+            file_name = path.split('/')[-1]
+        with open(osp(f'{text_datapath}', f'{file_name}.txt'), 'w') as f:
+            f.write(text_result)
 
 class DocGraph:
     '''
     Find the name of document and other document mentioned
     '''
-    def __init__(self, config):
-        self.document_regex = r'^\d{1,5}/(?:-?BC)(?:-[A-Z0-9.]+)?$'
-        pass
+    def __init__(
+            self,
+            document_reader_config:DocumentReader,
+            cache_dir = "./cache"
+    ):
+        self.report_document_regex = r'^\d{1,5}/(?:-?BC)(?:-[A-Z0-9.]+)?$'
+        self.general_document_regex = r'\b\d+/(?:\d+/)?[aáàảãạăắằẳẵặâấầẩẫậbcdđeéèẻẽẹêếềểễệfghiíìỉĩịjklmnoóòỏõọôốồổỗộơớờởỡợpqrstuúùủũụưứừửữựvwxyýỳỷỹỵAÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬBCDĐEÉÈẺẼẸÊẾỀỂỄỆFGHIÍÌỈĨỊJKLMNOÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢPQRSTUÚÙỦŨỤƯỨỪỬỮỰVWXYÝỲỶỸỴ0-9]+(?:-[AÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬBCDĐEÉÈẺẼẸÊẾỀỂỄỆFGHIÍÌỈĨỊJKLMNOÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢPQRSTUÚÙỦŨỤƯỨỪỬỮỰVWXYÝỲỶỸỴ0-9]+)?'
+        self.read_engine = DocumentReader(document_reader_config)
+        os.makedirs(cache_dir, exist_ok=True)
+        self.craw_online = CrawlOnlineTool(cache_dir)
 
-    def __call__(self, data_paths="data/bao_cao_unzip"):
-        pass
+    def __call__(
+            self,
+            data_paths="data/bao_cao_unzip",
+            general_metadata_path = "metadata/metadata.json",
+            metadata_path = "metadata/metadata_report.json",
+            text_datapath = "data/baocao_text",
+            saved_instruction_path = "data/instruction",
+    ):
+        '''
+        
+        '''
+        extention = ['pdf', 'doc', 'docx', 'jpeg', 'png', 'jpg', 'xls']
+        with open(general_metadata_path, "r") as f:
+            general_metadata = json.load(f)
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
 
-    @staticmethod
-    def mentioned_doc_extract(document:str):
+        for key, item in metadata.items():
+            file_names = item["file_names"]
+            main_doc_name = file_names[0]
+            if extention in main_doc_name:
+                main_doc_name = main_doc_name.split(extention)[0]
+            if os.path.isfile(osp(f'{text_datapath}', f'{main_doc_name}.txt')):
+                with open(osp(f'{text_datapath}', f'{main_doc_name}.txt'), 'r') as f:
+                    main_doc = f.read()
+                mention_documents = self.mentioned_doc_extract(main_doc)
+                try:
+                    pass
+                except:
+                    pass
+            else:
+                metadata = self.craw_online(key)
+                if metadata:
+                    pass
+
+    def mentioned_doc_extract(self, document:str):
         '''
         extract mentioned document in the document
         using regex
         '''
         document = re.sub(r' +', ' ', document)
-        mentioned_document = re.findall(r'^\d{1,5}/(?:-?BC)(?:-[A-Z0-9.]+)?$', document)
+        mentioned_documents = re.findall(self.general_document_regex, document)
+        return mentioned_documents
 
-    def get_instruction_template(self):
+    def get_instruction_template(
+            self,
+            title:str,
+            synthetic_doc:str,
+            related_docs:List[str],
+            tokenizer:PreTrainedTokenizerBase
+    )->str:
+        '''
+        Get prompt for LLM training
+
+        Args:
+            title: the title of document wanted to synthetic ex: THỐNG KÊ GIÁO DỤC KỲ CUỐI NĂM HỌC 2023-2024
+            synthetic_doc: the output document wanted to synthetic from related document
+            related_doc: all related document mention in the synthetic doc
+            tokenizer: tokenizer of LLM model want to used.
+
+        Returns:
+            The prompt for LLm training
+        '''
+        related_docs_text = ''
+        for i, doc in enumerate(related_docs):
+            related_docs_text += f'Document {i+1}:\n\n{doc}'
+        user_template = f'''You are a helpful assistant. Imagine you are a reporter writer for a school. \
+Your task is to synthetic all given document to write a general report with a given subtitle. 
+### The given documents is:
+{related_docs_text}
+
+### Synthetic document with title: {title}
+'''
+        message = [
+            {'role': 'user', 'content':user_template},
+            {'role': 'assistant', 'content':synthetic_doc}
+        ]
+        output_text = tokenizer.apply_chat_template(
+            message,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        return output_text
+    
+    def get_document_by_name(self, document_name, text_path)->str:
+        if os.path.isfile(osp(f"{text_path}", f"{document_name}.txt")):
+            with open(osp(f"{text_path}", f"{document_name}.txt"), "r") as f:
+                data = f.read()
+            return data
+        else:
+            pass
+
+    def get_document_by_symbol_number(self, document_number, general_metadata:Dict)->str:
         pass
+
 
 if __name__ == "__main__":
     pass
